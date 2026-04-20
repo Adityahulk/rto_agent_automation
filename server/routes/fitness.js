@@ -1,0 +1,190 @@
+import { Router } from 'express'
+import { prisma } from '../lib/prisma.js'
+import { verifyAgentToken } from '../middleware/auth.js'
+import { checkSubscription } from '../middleware/checkSubscription.js'
+import {
+  prismaStatusWhere,
+  readIsoDate,
+  searchVehicleClientOr,
+  statsForModel,
+  statusFromExpiryDate,
+} from '../lib/complianceExpiry.js'
+import { assertVehicleForTenant } from '../lib/vehicleTenant.js'
+
+const router = Router()
+router.use(verifyAgentToken, checkSubscription)
+
+router.get('/', async (req, res) => {
+  const tenantId = req.tenant.id
+  const search = typeof req.query.search === 'string' ? req.query.search : ''
+  const status = typeof req.query.status === 'string' ? req.query.status : ''
+
+  const parts = [{ tenantId }, { vehicle: { client: { deletedAt: null } } }]
+  const sw = searchVehicleClientOr(search)
+  if (sw) parts.push(sw)
+  const pw = prismaStatusWhere(status)
+  if (Object.keys(pw).length) parts.push(pw)
+  const where = { AND: parts }
+
+  const [rows, stats] = await Promise.all([
+    prisma.fitnessRecord.findMany({
+      where,
+      include: { vehicle: { include: { client: true } } },
+      orderBy: { expiryDate: 'asc' },
+    }),
+    statsForModel({
+      tenantId,
+      prismaModel: prisma.fitnessRecord,
+      extraWhere: { vehicle: { client: { deletedAt: null } } },
+    }),
+  ])
+
+  res.json({
+    stats,
+    items: rows.map((row) => ({
+      id: row.id,
+      clientName: row.vehicle.client.name,
+      vehicleNumber: row.vehicle.vehicleNumber,
+      clientId: row.vehicle.clientId,
+      vehicleId: row.vehicleId,
+      certificateNumber: row.certificateNumber,
+      issuedBy: row.issuedBy,
+      validFrom: row.validFrom?.toISOString() ?? null,
+      expiryDate: row.expiryDate.toISOString(),
+      status: statusFromExpiryDate(row.expiryDate),
+      lastRenewedAt: row.lastRenewedAt?.toISOString() ?? null,
+    })),
+  })
+})
+
+router.post('/', async (req, res) => {
+  const tenantId = req.tenant.id
+  const body = req.body ?? {}
+  const vehicleId = typeof body.vehicleId === 'string' ? body.vehicleId.trim() : ''
+  const certificateNumber =
+    typeof body.certificateNumber === 'string' ? body.certificateNumber.trim() : ''
+  const issuedBy = typeof body.issuedBy === 'string' ? body.issuedBy.trim() : ''
+  if (!vehicleId || !certificateNumber || !issuedBy) {
+    return res.status(400).json({ message: 'vehicleId, certificateNumber, and issuedBy are required' })
+  }
+
+  const v = await assertVehicleForTenant(vehicleId, tenantId)
+  if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+
+  const ed = readIsoDate(body.expiryDate, 'expiryDate')
+  if (!ed.ok) return res.status(400).json({ message: ed.error })
+
+  let validFrom = null
+  if (body.validFrom) {
+    const vf = readIsoDate(body.validFrom, 'validFrom')
+    if (!vf.ok) return res.status(400).json({ message: vf.error })
+    validFrom = vf.date
+  }
+
+  const row = await prisma.fitnessRecord.create({
+    data: {
+      tenantId,
+      vehicleId,
+      certificateNumber,
+      issuedBy,
+      validFrom,
+      expiryDate: ed.date,
+    },
+  })
+
+  res.status(201).json({
+    id: row.id,
+    expiryDate: row.expiryDate.toISOString(),
+    status: statusFromExpiryDate(row.expiryDate),
+  })
+})
+
+router.put('/:id', async (req, res) => {
+  const tenantId = req.tenant.id
+  const { id } = req.params
+  const existing = await prisma.fitnessRecord.findFirst({
+    where: { id, tenantId },
+  })
+  if (!existing) return res.status(404).json({ message: 'Not found' })
+
+  const body = req.body ?? {}
+  const data = {}
+
+  if (typeof body.certificateNumber === 'string') {
+    data.certificateNumber = body.certificateNumber.trim()
+  }
+  if (typeof body.issuedBy === 'string') data.issuedBy = body.issuedBy.trim()
+  if (body.validFrom === null) {
+    data.validFrom = null
+  } else if (body.validFrom) {
+    const vf = readIsoDate(body.validFrom, 'validFrom')
+    if (!vf.ok) return res.status(400).json({ message: vf.error })
+    data.validFrom = vf.date
+  }
+  if (body.expiryDate) {
+    const r = readIsoDate(body.expiryDate, 'expiryDate')
+    if (!r.ok) return res.status(400).json({ message: r.error })
+    data.expiryDate = r.date
+  }
+  if (typeof body.vehicleId === 'string' && body.vehicleId.trim()) {
+    const v = await assertVehicleForTenant(body.vehicleId.trim(), tenantId)
+    if (!v) return res.status(404).json({ message: 'Vehicle not found' })
+    data.vehicleId = v.id
+  }
+
+  if (Object.keys(data).length === 0) {
+    return res.status(400).json({ message: 'No valid fields to update' })
+  }
+
+  const row = await prisma.fitnessRecord.update({
+    where: { id: existing.id },
+    data,
+  })
+
+  res.json({
+    id: row.id,
+    expiryDate: row.expiryDate.toISOString(),
+    status: statusFromExpiryDate(row.expiryDate),
+  })
+})
+
+router.patch('/:id/renew', async (req, res) => {
+  const tenantId = req.tenant.id
+  const { id } = req.params
+  const existing = await prisma.fitnessRecord.findFirst({
+    where: { id, tenantId },
+  })
+  if (!existing) return res.status(404).json({ message: 'Not found' })
+
+  const r = readIsoDate(req.body?.expiryDate, 'expiryDate')
+  if (!r.ok) return res.status(400).json({ message: r.error })
+
+  const row = await prisma.fitnessRecord.update({
+    where: { id: existing.id },
+    data: {
+      expiryDate: r.date,
+      lastRenewedAt: new Date(),
+    },
+  })
+
+  res.json({
+    id: row.id,
+    expiryDate: row.expiryDate.toISOString(),
+    status: statusFromExpiryDate(row.expiryDate),
+    lastRenewedAt: row.lastRenewedAt?.toISOString() ?? null,
+  })
+})
+
+router.delete('/:id', async (req, res) => {
+  const tenantId = req.tenant.id
+  const { id } = req.params
+  const existing = await prisma.fitnessRecord.findFirst({
+    where: { id, tenantId },
+  })
+  if (!existing) return res.status(404).json({ message: 'Not found' })
+
+  await prisma.fitnessRecord.delete({ where: { id: existing.id } })
+  res.status(204).send()
+})
+
+export default router

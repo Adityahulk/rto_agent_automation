@@ -1,0 +1,27 @@
+{
+  "name": "rto-agent-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npm run start --prefix server",
+    "dev": "npm run dev --prefix server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:ui": "npm run dev --prefix rto-helper",
+    "build:ui": "npm run build --prefix rto-helper",
+    "db:migrate": "node scripts/run-sql.js db/migrations/001_schema.sql",
+    "db:seed": "node scripts/seed.js",
+    "db:setup": "npm run db:migrate && npm run db:seed"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0"
+  }
+}

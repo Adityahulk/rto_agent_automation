@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantSubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  BLOCKED
+}
+
+enum VehicleType {
+  TWO_W
+  FOUR_W
+  COMMERCIAL
+  EV
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model Tenant {
+  id                    String                   @id @default(cuid())
+  name                  String
+  email                 String                   @unique
+  passwordHash          String
+  businessName          String
+  logoUrl               String?
+  whatsappNumber        String?
+  isBlocked             Boolean                  @default(false)
+  subscriptionStatus    TenantSubscriptionStatus @default(ACTIVE)
+  subscriptionExpiresAt DateTime?
+  createdAt             DateTime                 @default(now())
+
+  clients             Client[]
+  insurancePolicies   InsurancePolicy[]
+  fitnessRecords      FitnessRecord[]
+  pucRecords          PUCRecord[]
+  permitRecords       PermitRecord[]
+  feeCalculations     FeeCalculation[]
+  quotes              Quote[]
+  rtoForms            RtoForm[]
+  serviceCharges      ServiceCharge[]
+  subscriptions       Subscription[]
+}
+
+model Client {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name            String
+  phone           String?
+  alternatePhone  String?
+  address         String?
+  city            String?
+  state           String?
+  notes           String?   @db.Text
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  vehicles          Vehicle[]
+  feeCalculations   FeeCalculation[]
+  quotes            Quote[]
+  rtoForms          RtoForm[]
+  serviceCharges    ServiceCharge[]
+
+  @@index([tenantId])
+  @@index([tenantId, deletedAt])
+}
+
+model Vehicle {
+  id            String      @id @default(cuid())
+  clientId      String
+  client        Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  vehicleNumber String
+  make          String
+  model         String
+  year          Int?
+  fuelType      String?
+  vehicleType   VehicleType
+  chassisNumber String?
+  engineNumber  String?
+
+  insurancePolicies InsurancePolicy[]
+  fitnessRecords    FitnessRecord[]
+  pucRecords        PUCRecord[]
+  permitRecords     PermitRecord[]
+  rtoForms          RtoForm[]
+
+  @@index([clientId])
+}
+
+model InsurancePolicy {
+  id             String    @id @default(cuid())
+  vehicleId      String
+  vehicle        Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policyNumber   String
+  insurer        String
+  policyType     String
+  premium        Decimal   @db.Decimal(14, 2)
+  startDate      DateTime
+  expiryDate     DateTime
+  status         String
+  lastRenewedAt  DateTime?
+
+  @@index([tenantId])
+  @@index([vehicleId])
+}
+
+model FitnessRecord {
+  id                String    @id @default(cuid())
+  vehicleId         String
+  vehicle           Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  certificateNumber String
+  issuedBy          String
+  validFrom         DateTime?
+  expiryDate        DateTime
+  lastRenewedAt     DateTime?
+
+  @@index([tenantId])
+  @@index([vehicleId])
+}
+
+model PUCRecord {
+  id            String    @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pucNumber     String
+  testCenter    String
+  expiryDate    DateTime
+  lastRenewedAt DateTime?
+
+  @@index([tenantId])
+  @@index([vehicleId])
+}
+
+model PermitRecord {
+  id            String    @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permitType    String
+  issuedState   String
+  expiryDate    DateTime
+  lastRenewedAt DateTime?
+
+  @@index([tenantId])
+  @@index([vehicleId])
+}
+
+model FeeRate {
+  id               String      @id @default(cuid())
+  state            String
+  vehicleType      VehicleType
+  minPrice         Decimal     @db.Decimal(14, 2)
+  maxPrice         Decimal     @db.Decimal(14, 2)
+  roadTaxPercent   Decimal     @db.Decimal(8, 4)
+  registrationFee  Decimal     @db.Decimal(14, 2)
+  hsrpFee          Decimal     @db.Decimal(14, 2)
+  smartCardFee     Decimal     @db.Decimal(14, 2)
+  updatedAt        DateTime    @updatedAt
+
+  @@unique([state, vehicleType])
+}
+
+model FeeRateVersion {
+  id        String   @id @default(cuid())
+  filename  String
+  rowCount  Int
+  createdAt DateTime @default(now())
+  snapshot  Json
+}
+
+model AppSetting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+model FeeCalculation {
+  id           String      @id @default(cuid())
+  tenantId     String
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId     String
+  client       Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  state        String
+  vehicleType  VehicleType
+  invoicePrice Decimal     @db.Decimal(14, 2)
+  totalTax     Decimal     @db.Decimal(14, 2)
+  totalFees    Decimal     @db.Decimal(14, 2)
+  grandTotal   Decimal     @db.Decimal(14, 2)
+  createdAt    DateTime    @default(now())
+
+  quotes Quote[]
+
+  @@index([tenantId])
+  @@index([clientId])
+}
+
+model Quote {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId          String
+  client            Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  calculationId     String
+  calculation       FeeCalculation @relation(fields: [calculationId], references: [id], onDelete: Cascade)
+  pdfUrl            String?
+  sentViaWhatsapp   Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([calculationId])
+}
+
+model RtoForm {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId   String?
+  client     Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  vehicleId  String?
+  vehicle    Vehicle?  @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  formType   String
+  formData   Json?
+  pdfUrl     String?
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([vehicleId])
+}
+
+model ServiceCharge {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  service   String
+  amount    Decimal  @db.Decimal(14, 2)
+  date      DateTime
+
+  @@index([tenantId])
+  @@index([clientId])
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan      String
+  amount    Decimal  @db.Decimal(14, 2)
+  startDate DateTime
+  endDate   DateTime
+  paymentId String?
+
+  @@index([tenantId])
+}
